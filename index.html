@@ -1,0 +1,274 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PCU Concert Staff Scanner</title>
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 18px;
+      font-family: Arial, sans-serif;
+      background: #f2f4f8;
+      color: #182238;
+    }
+
+    .card {
+      max-width: 520px;
+      margin: 10px auto;
+      padding: 22px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 5px 24px #0001;
+    }
+
+    h1 { color: #192957; font-size: 23px; }
+
+    button {
+      width: 100%;
+      padding: 15px;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 9px;
+      background: #192957;
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:disabled { opacity: .55; }
+
+    #startBtn, #resumeBtn { background: #18723b; }
+
+    #reader {
+      width: 100%;
+      margin-top: 18px;
+    }
+
+    .notice {
+      padding: 14px;
+      margin-top: 15px;
+      border-radius: 9px;
+      background: #eef3ff;
+      color: #192957;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden { display: none !important; }
+
+    .small {
+      color: #667085;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="card">
+    <h1>PCU Concert Staff Scanner</h1>
+
+    <p>
+      Scan a ticket QR code to open its verification and
+      check-in page.
+    </p>
+
+    <button id="startBtn" onclick="startScanning()">
+      START SCANNING
+    </button>
+
+    <div id="reader"></div>
+
+    <div id="status" class="notice">
+      Camera is off.
+    </div>
+
+    <button id="resumeBtn" class="hidden" onclick="startScanning()">
+      SCAN NEXT TICKET
+    </button>
+
+    <p class="small">
+      Keep this page open while processing tickets.
+      After completing a ticket in the other tab, return here
+      to scan the next one.
+    </p>
+  </main>
+
+  <script>
+    const APPS_SCRIPT_URL =
+      "https://script.google.com/macros/s/AKfycbxWt1kUEkAPnureW7JNNOvoRHCtQdkTQgMY8PgFztVUyjzPU-JchNmFe5fcUXHc7mX-/exec";
+
+    let scanner = null;
+    let scanning = false;
+    let openingTicket = false;
+
+    const statusBox = document.getElementById("status");
+    const startBtn = document.getElementById("startBtn");
+    const resumeBtn = document.getElementById("resumeBtn");
+
+    function setStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    function extractToken(qrText) {
+      try {
+        const url = new URL(qrText);
+
+        return (
+          url.searchParams.get("t") ||
+          url.searchParams.get("token") ||
+          ""
+        ).trim();
+      } catch (error) {
+        return "";
+      }
+    }
+
+    async function startScanning() {
+      if (scanning || openingTicket) return;
+
+      if (!window.isSecureContext) {
+        setStatus(
+          "Camera access requires a secure HTTPS connection. " +
+          "Open this page using its GitHub Pages HTTPS address."
+        );
+        return;
+      }
+
+      if (typeof Html5Qrcode === "undefined") {
+        setStatus(
+          "Scanner library did not load. Check your internet connection and reload."
+        );
+        return;
+      }
+
+      startBtn.disabled = true;
+      resumeBtn.classList.add("hidden");
+      setStatus("Starting camera...");
+
+      try {
+        if (!scanner) {
+          scanner = new Html5Qrcode("reader");
+        }
+
+        await scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 240, height: 240 }
+          },
+          handleScan,
+          function () {}
+        );
+
+        scanning = true;
+        startBtn.classList.add("hidden");
+
+        setStatus("CAMERA ACTIVE — READY TO SCAN.");
+
+      } catch (error) {
+        scanning = false;
+        startBtn.disabled = false;
+
+        setStatus(
+          "CAMERA ERROR: " +
+          (error && error.message ? error.message : error)
+        );
+      }
+    }
+
+    async function stopScanning() {
+      if (scanner && scanning) {
+        try {
+          await scanner.stop();
+        } catch (error) {
+          // It may already be stopped.
+        }
+      }
+
+      scanning = false;
+    }
+
+    async function handleScan(decodedText) {
+      if (openingTicket) return;
+
+      openingTicket = true;
+      await stopScanning();
+
+      const token = extractToken(decodedText);
+
+      if (!token) {
+        openingTicket = false;
+        setStatus(
+          "INVALID QR CODE — no ticket token was found."
+        );
+        resumeBtn.classList.remove("hidden");
+        return;
+      }
+
+      setStatus("QR SCANNED — OPENING TICKET...");
+
+      const ticketUrl =
+        APPS_SCRIPT_URL + "?t=" + encodeURIComponent(token);
+
+      const newTab = window.open(ticketUrl, "_blank");
+
+      if (!newTab) {
+        setStatus(
+          "The browser blocked the new tab. Allow pop-ups for this site, " +
+          "then tap OPEN TICKET."
+        );
+
+        const openBtn = document.createElement("button");
+        openBtn.textContent = "OPEN TICKET";
+        openBtn.onclick = function () {
+          window.open(ticketUrl, "_blank");
+          openBtn.remove();
+          showNextButton();
+        };
+
+        document.querySelector(".card").appendChild(openBtn);
+        return;
+      }
+
+      setStatus(
+        "TICKET OPENED IN A NEW TAB. Complete its sale or check-in, " +
+        "then return here."
+      );
+
+      showNextButton();
+    }
+
+    function showNextButton() {
+      openingTicket = false;
+      startBtn.disabled = false;
+      resumeBtn.classList.remove("hidden");
+    }
+
+    async function returnToScanner() {
+      resumeBtn.classList.add("hidden");
+      setStatus("Ready for the next ticket.");
+      await startScanning();
+    }
+
+    resumeBtn.addEventListener("click", returnToScanner);
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && !scanning && !openingTicket) {
+        setStatus(
+          "Welcome back. Tap SCAN NEXT TICKET to reactivate the camera."
+        );
+        resumeBtn.classList.remove("hidden");
+      }
+    });
+  </script>
+</body>
+</html>
